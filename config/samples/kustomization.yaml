@@ -1,0 +1,4 @@
+## Append samples you want in your CSV to this file as resources ##
+resources:
+- netest_v1alpha1_netest.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

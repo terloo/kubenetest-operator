@@ -1,0 +1,20 @@
+# permissions for end users to view netests.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: netest-viewer-role
+rules:
+- apiGroups:
+  - netest.terloo.github.com
+  resources:
+  - netests
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - netest.terloo.github.com
+  resources:
+  - netests/status
+  verbs:
+  - get

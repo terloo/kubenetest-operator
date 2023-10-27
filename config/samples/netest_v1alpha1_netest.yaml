@@ -1,0 +1,6 @@
+apiVersion: netest.terloo.github.com/v1alpha1
+kind: Netest
+metadata:
+  name: netest-sample
+spec:
+  # TODO(user): Add fields here
