@@ -16,18 +16,28 @@ type NetestSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of Netest. Edit netest_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	// network test phase
+	Phase string `json:"phase,omitempty"`
 }
 
 // NetestStatus defines the observed state of Netest
 type NetestStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
+
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	AgentTestResult map[string]TestResult `json:"agentTestResult,omitempty"`
+}
+
+type TestResult struct {
+	Ping bool `json:"ping,omitempty"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
+//+kubebuilder:resource:scope=Cluster
+//+genclient
 
 // Netest is the Schema for the netests API
 type Netest struct {

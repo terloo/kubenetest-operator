@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ .ObjectMeta.Name }}
+  namespace: kubenetest
+spec:
+  selector:
+    matchLabels:
+      name: {{ .ObjectMeta.Name }}
+  template:
+    metadata:
+      labels:
+        name: {{ .ObjectMeta.Name }}
+    spec:
+      containers:
+      - name: kubenetest
+        image: dev:5000/registry:latest
+        imagePullPolicy: Always
