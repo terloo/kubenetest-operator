@@ -12,7 +12,19 @@ spec:
       labels:
         name: {{ .ObjectMeta.Name }}
     spec:
+      hostNetwork: true
       containers:
       - name: kubenetest
         image: dev:5000/registry:latest
+        args:
+        - "--local-ip=$(POD_IP)"
         imagePullPolicy: Always
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8888
+        env:
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
