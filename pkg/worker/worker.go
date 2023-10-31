@@ -1,36 +1,41 @@
 package worker
 
 import (
-	"fmt"
-	"io"
-	"net/http"
+	"encoding/json"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"sync"
 
-	"k8s.io/apimachinery/pkg/util/json"
+	"github.com/terloo/kubenetest-operator/pkg/meta"
+	"github.com/terloo/kubenetest-operator/pkg/stats"
 	"k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/klog/v2"
 )
 
-type NetestWorkers struct {
+type NetestWorker struct {
 	lock        sync.Mutex
-	workersChan map[*netip.Addr]chan *NetestWork
+	workersChan map[*netip.Addr]chan *meta.NetestWork
+	close       bool
+
+	stats []*stats.NetestStats
 }
 
-func NewNetestWorkers() *NetestWorkers {
-	workers := &NetestWorkers{
-		workersChan: make(map[*netip.Addr]chan *NetestWork, 10),
+func NewNetestWorkers() *NetestWorker {
+	workers := &NetestWorker{
+		workersChan: make(map[*netip.Addr]chan *meta.NetestWork, 10),
+		stats:       make([]*stats.NetestStats, 0),
 	}
 	return workers
 }
 
-func (w *NetestWorkers) Work(ip *netip.Addr, work *NetestWork) {
+func (w *NetestWorker) Work(ip *netip.Addr, work *meta.NetestWork) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
 
 	workerChan, ok := w.workersChan[ip]
 	if !ok {
-		workerChan = make(chan *NetestWork, 1)
+		workerChan = make(chan *meta.NetestWork, 1)
 		go func() {
 			defer runtime.HandleCrash()
 			w.loopWork(ip, workerChan)
@@ -42,37 +47,55 @@ func (w *NetestWorkers) Work(ip *netip.Addr, work *NetestWork) {
 
 }
 
-func (w *NetestWorkers) loopWork(ip *netip.Addr, workerChan <-chan *NetestWork) {
+func (w *NetestWorker) loopWork(ip *netip.Addr, workerChan <-chan *meta.NetestWork) {
 
 	for work := range workerChan {
 
-		if work.Type == Ping {
-			url := fmt.Sprintf("http://%s:8888/ping?addr=%s", ip.String(), work.Value)
-			klog.Infof("request to pod %s url %s", ip.String(), url)
-			resp, err := http.Get(url)
+		switch work.Type {
+		case meta.Ping:
+			pingResp, err := TestPing(ip, work)
 			if err != nil {
-				klog.Error(err, "work ping fail")
+				klog.Error(err)
+				continue
 			}
-			b, err := io.ReadAll(resp.Body)
-			if err != nil {
-				klog.Error(err, "work ping fail")
-			}
-			respBody := make(map[string]interface{})
-			json.Unmarshal(b, &respBody)
-			klog.Info("resp: ", respBody)
-		}
 
+			targetAddr, _ := netip.ParseAddr(pingResp.Addr)
+			pingStats := stats.NewPingNetestStats(*ip, targetAddr)
+			pingStats.Passed = pingResp.PkgSent == pingResp.PkgRecv
+			pingStats.Metric = pingResp.AvgRtt
+
+			klog.Info("ping result: ", pingStats)
+			w.stats = append(w.stats, pingStats)
+		}
 	}
+
 }
 
-const (
-	Ping WorkType = "ping"
-)
+func (w *NetestWorker) Close(name string) {
+	w.lock.Lock()
+	defer w.lock.Unlock()
 
-type WorkType string
+	for _, workersChan := range w.workersChan {
+		close(workersChan)
+	}
 
-type NetestWork struct {
-	Type WorkType
+	w.persistStat(name)
+}
 
-	Value string
+func (w *NetestWorker) persistStat(name string) {
+
+	statFilePath := filepath.Join(os.TempDir(), name+"-stats.json")
+	f, err := os.Create(statFilePath)
+	if err != nil {
+		klog.ErrorS(err, "persist stat error")
+		return
+	}
+	b, err := json.Marshal(w.stats)
+	if err != nil {
+		klog.ErrorS(err, "persist stat error")
+		return
+	}
+
+	klog.InfoS("success persist statis file", "name", name, "path", statFilePath)
+	f.Write(b)
 }

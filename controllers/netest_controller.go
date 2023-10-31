@@ -11,6 +11,7 @@ import (
 
 	netestv1alpha1 "github.com/terloo/kubenetest-operator/api/v1alpha1"
 	"github.com/terloo/kubenetest-operator/controllers/utils"
+	"github.com/terloo/kubenetest-operator/pkg/meta"
 	"github.com/terloo/kubenetest-operator/pkg/worker"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -31,7 +32,7 @@ type NetestReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	Workers *worker.NetestWorkers
+	Workers map[string]*worker.NetestWorker
 }
 
 //+kubebuilder:rbac:groups=netest.terloo.github.com,resources=netests,verbs=get;list;watch;create;update;patch;delete
@@ -54,7 +55,8 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	err := r.Client.Get(ctx, req.NamespacedName, netest)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			klog.Info("crd has deleted", "name", req.Name)
+			klog.InfoS("crd has deleted", "name", req.Name)
+			r.Workers[req.Name].Close(req.Name)
 			return ctrl.Result{}, nil
 		}
 		klog.Error(err, err.Error())
@@ -96,7 +98,7 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	ds = currentDS
 
 	// wait for ds ready
-	if ds.Status.NumberReady != ds.Status.DesiredNumberScheduled {
+	if ds.Status.DesiredNumberScheduled == 0 || ds.Status.NumberReady != ds.Status.DesiredNumberScheduled {
 		klog.Infof("ds %s is not ready...", ds.Name)
 		return ctrl.Result{Requeue: true, RequeueAfter: 3 * time.Second}, nil
 	}
@@ -119,17 +121,23 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		ipSlice[i] = &ip
 	}
 
+	w, ok := r.Workers[req.Name]
+	if !ok {
+		w = worker.NewNetestWorkers()
+		r.Workers[req.Name] = w
+	}
+
 	for _, ip := range ipSlice {
 		for _, targetIP := range ipSlice {
 			if ip == targetIP {
 				continue
 			}
 
-			work := &worker.NetestWork{
-				Type:  worker.Ping,
+			work := &meta.NetestWork{
+				Type:  meta.Ping,
 				Value: targetIP.String(),
 			}
-			r.Workers.Work(ip, work)
+			r.Workers[req.Name].Work(ip, work)
 		}
 	}
 
@@ -139,7 +147,7 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // SetupWithManager sets up the controller with the Manager.
 func (r *NetestReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Workers == nil {
-		r.Workers = worker.NewNetestWorkers()
+		r.Workers = make(map[string]*worker.NetestWorker)
 	}
 
 	return ctrl.NewControllerManagedBy(mgr).
