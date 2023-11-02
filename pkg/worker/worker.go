@@ -16,12 +16,13 @@ import (
 type NetestWorker struct {
 	lock        sync.Mutex
 	workersChan map[*netip.Addr]chan *meta.NetestWork
+	runningWork map[meta.NetestType]struct{}
 	close       bool
 
 	stats []*stats.NetestStats
 }
 
-func NewNetestWorkers() *NetestWorker {
+func NewNetestWorker() *NetestWorker {
 	workers := &NetestWorker{
 		workersChan: make(map[*netip.Addr]chan *meta.NetestWork, 10),
 		stats:       make([]*stats.NetestStats, 0),
@@ -32,6 +33,13 @@ func NewNetestWorkers() *NetestWorker {
 func (w *NetestWorker) Work(ip *netip.Addr, work *meta.NetestWork) {
 	w.lock.Lock()
 	defer w.lock.Unlock()
+
+	if ip == nil {
+		notReadyInfra := stats.NewInfraNetestStats(nil)
+		notReadyInfra.Passed = false
+		notReadyInfra.PodName = work.Value
+		w.stats = append(w.stats, notReadyInfra)
+	}
 
 	workerChan, ok := w.workersChan[ip]
 	if !ok {
@@ -60,13 +68,22 @@ func (w *NetestWorker) loopWork(ip *netip.Addr, workerChan <-chan *meta.NetestWo
 			}
 
 			targetAddr, _ := netip.ParseAddr(pingResp.Addr)
-			pingStats := stats.NewPingNetestStats(*ip, targetAddr)
+			pingStats := stats.NewPingNetestStats(ip, &targetAddr)
 			pingStats.Passed = pingResp.PkgSent == pingResp.PkgRecv
 			pingStats.Metric = pingResp.AvgRtt
 
 			klog.Info("ping result: ", pingStats)
 			w.stats = append(w.stats, pingStats)
+		case meta.Infra:
+			infraResp, err := TestInfra(ip, work)
+			if err != nil {
+				klog.Error(err)
+				continue
+			}
+			// TODO
+			klog.Info("infra result: ", infraResp)
 		}
+
 	}
 
 }

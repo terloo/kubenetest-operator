@@ -32,7 +32,8 @@ type NetestReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	Workers map[string]*worker.NetestWorker
+	Workers           map[string]*worker.NetestWorker
+	readyRequeueCount map[string]int
 }
 
 //+kubebuilder:rbac:groups=netest.terloo.github.com,resources=netests,verbs=get;list;watch;create;update;patch;delete
@@ -56,6 +57,7 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		if errors.IsNotFound(err) {
 			klog.InfoS("crd has deleted", "name", req.Name)
+			delete(r.Workers, req.Name)
 			r.Workers[req.Name].Close(req.Name)
 			return ctrl.Result{}, nil
 		}
@@ -97,12 +99,6 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	ds = currentDS
 
-	// wait for ds ready
-	if ds.Status.DesiredNumberScheduled == 0 || ds.Status.NumberReady != ds.Status.DesiredNumberScheduled {
-		klog.Infof("ds %s is not ready...", ds.Name)
-		return ctrl.Result{Requeue: true, RequeueAfter: 3 * time.Second}, nil
-	}
-
 	// obtain pod of ds
 	podList := &corev1.PodList{}
 	err = r.Client.List(ctx, podList, client.InNamespace(ds.Namespace), client.MatchingLabels(map[string]string{
@@ -112,23 +108,50 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	ipSlice := make([]*netip.Addr, len(podList.Items))
-	for i, pod := range podList.Items {
-		ip, err := netip.ParseAddr(pod.Status.PodIP)
-		if err != nil {
-			klog.Error(err, err.Error())
+	requeueTime := r.readyRequeueCount[req.Name]
+	if ds.Status.DesiredNumberScheduled == 0 || ds.Status.NumberReady != ds.Status.DesiredNumberScheduled {
+		if r.readyRequeueCount[req.Name] <= 3 {
+			// wait for ds ready
+			klog.Infof("ds %s is not ready...", ds.Name)
+			r.readyRequeueCount[req.Name] = requeueTime + 1
+			return ctrl.Result{Requeue: true, RequeueAfter: 3 * time.Second}, nil
 		}
-		ipSlice[i] = &ip
+		klog.Info("after waiting for ds ready, some pod still not reay")
 	}
 
 	w, ok := r.Workers[req.Name]
 	if !ok {
-		w = worker.NewNetestWorkers()
+		w = worker.NewNetestWorker()
 		r.Workers[req.Name] = w
 	}
 
-	for _, ip := range ipSlice {
-		for _, targetIP := range ipSlice {
+	// test pod infra
+	podIPs := make([]*netip.Addr, 0)
+	for _, pod := range podList.Items {
+
+		work := &meta.NetestWork{
+			Type:    meta.Infra,
+			PodName: pod.Name,
+		}
+		if len(pod.Status.ContainerStatuses) == 0 || !pod.Status.ContainerStatuses[0].Ready {
+			// not ready po is treated as no ip
+			w.Work(nil, work)
+			continue
+		}
+
+		ip, err := netip.ParseAddr(pod.Status.PodIP)
+		if err != nil {
+			klog.Error(err, err.Error())
+			continue
+		}
+		podIPs = append(podIPs, &ip)
+
+		w.Work(&ip, work)
+	}
+
+	// test pod ping
+	for _, ip := range podIPs {
+		for _, targetIP := range podIPs {
 			if ip == targetIP {
 				continue
 			}
@@ -137,7 +160,7 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				Type:  meta.Ping,
 				Value: targetIP.String(),
 			}
-			r.Workers[req.Name].Work(ip, work)
+			w.Work(ip, work)
 		}
 	}
 
@@ -146,9 +169,8 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *NetestReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	if r.Workers == nil {
-		r.Workers = make(map[string]*worker.NetestWorker)
-	}
+	r.Workers = make(map[string]*worker.NetestWorker)
+	r.readyRequeueCount = make(map[string]int)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&netestv1alpha1.Netest{}).

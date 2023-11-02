@@ -8,13 +8,22 @@ import (
 
 type NetestStats struct {
 	NetestType meta.NetestType
-	SourceAddr netip.Addr
-	TargetAddr netip.Addr
+	PodName    string
+	SourceAddr *netip.Addr
+	TargetAddr *netip.Addr
 	Passed     bool
 	Metric     int
 }
 
-func NewPingNetestStats(source, target netip.Addr) *NetestStats {
+func NewInfraNetestStats(source *netip.Addr) *NetestStats {
+	stats := &NetestStats{
+		NetestType: meta.Infra,
+		SourceAddr: source,
+	}
+	return stats
+}
+
+func NewPingNetestStats(source, target *netip.Addr) *NetestStats {
 	stats := &NetestStats{
 		NetestType: meta.Ping,
 		SourceAddr: source,

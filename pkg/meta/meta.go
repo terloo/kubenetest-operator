@@ -1,12 +1,14 @@
 package meta
 
-const (
-	Ping NetestType = "ping"
-)
-
 type NetestType string
 
+const (
+	Infra NetestType = "infra"
+	Ping  NetestType = "ping"
+)
+
 type NetestWork struct {
-	Type  NetestType
-	Value string
+	Type     NetestType
+	PodName string
+	Value    string
 }
