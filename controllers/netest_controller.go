@@ -57,12 +57,34 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		if errors.IsNotFound(err) {
 			klog.InfoS("crd has deleted", "name", req.Name)
-			delete(r.Workers, req.Name)
-			r.Workers[req.Name].Close(req.Name)
+			w, ok := r.Workers[req.Name]
+			if ok {
+				w.Close(req.Name)
+				delete(r.Workers, req.Name)
+			}
 			return ctrl.Result{}, nil
 		}
 		klog.Error(err, err.Error())
 		return ctrl.Result{}, err
+	}
+
+	// initial netest object status
+	if netest.Status.TestItems == nil {
+		testItems := make(map[meta.NetestType]*netestv1alpha1.NetestResult)
+		testItems[meta.Ping] = &netestv1alpha1.NetestResult{
+			Type:   meta.Ping,
+			Status: netestv1alpha1.Queue,
+		}
+		testItems[meta.Infra] = &netestv1alpha1.NetestResult{
+			Type:   meta.Infra,
+			Status: netestv1alpha1.Queue,
+		}
+		netest.Status.TestItems = testItems
+		err := r.Client.Status().Update(ctx, netest)
+		if err != nil {
+			klog.Error(err, err.Error())
+			return ctrl.Result{}, err
+		}
 	}
 
 	// create namespace
@@ -91,6 +113,8 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		if errors.IsNotFound(err) {
 			err = r.Client.Create(ctx, ds)
+			klog.InfoS("create ds", "name", ds.Name)
+			return ctrl.Result{Requeue: true, RequeueAfter: 3 * time.Second}, nil
 		}
 		if err != nil {
 			klog.Error(err, err.Error())
@@ -116,8 +140,10 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			r.readyRequeueCount[req.Name] = requeueTime + 1
 			return ctrl.Result{Requeue: true, RequeueAfter: 3 * time.Second}, nil
 		}
-		klog.Info("after waiting for ds ready, some pod still not reay")
+		klog.Info("after waiting some time, some pod still not ready")
 	}
+
+	klog.Info("starting netest")
 
 	w, ok := r.Workers[req.Name]
 	if !ok {
@@ -125,42 +151,54 @@ func (r *NetestReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		r.Workers[req.Name] = w
 	}
 
-	// test pod infra
+	testItems := netest.Status.TestItems
+
 	podIPs := make([]*netip.Addr, 0)
-	for _, pod := range podList.Items {
-
-		work := &meta.NetestWork{
-			Type:    meta.Infra,
-			PodName: pod.Name,
-		}
-		if len(pod.Status.ContainerStatuses) == 0 || !pod.Status.ContainerStatuses[0].Ready {
-			// not ready po is treated as no ip
-			w.Work(nil, work)
-			continue
-		}
-
-		ip, err := netip.ParseAddr(pod.Status.PodIP)
-		if err != nil {
-			klog.Error(err, err.Error())
-			continue
-		}
-		podIPs = append(podIPs, &ip)
-
-		w.Work(&ip, work)
-	}
-
-	// test pod ping
-	for _, ip := range podIPs {
-		for _, targetIP := range podIPs {
-			if ip == targetIP {
+	if testItems[meta.Infra].Status < netestv1alpha1.Runing {
+		// test pod infra
+		for _, pod := range podList.Items {
+			work := &meta.NetestWork{
+				Type:    meta.Infra,
+				PodName: pod.Name,
+			}
+			if len(pod.Status.ContainerStatuses) == 0 || !pod.Status.ContainerStatuses[0].Ready {
+				// not ready pod is treated as no ip
+				w.Work(nil, work)
 				continue
 			}
 
-			work := &meta.NetestWork{
-				Type:  meta.Ping,
-				Value: targetIP.String(),
+			ip, err := netip.ParseAddr(pod.Status.PodIP)
+			if err != nil {
+				klog.Error(err, err.Error())
+				continue
 			}
-			w.Work(ip, work)
+			podIPs = append(podIPs, &ip)
+
+			w.Work(&ip, work)
+		}
+
+		netest.Status.TestItems[meta.Infra].Status = netestv1alpha1.Runing
+		err := r.Client.Status().Update(ctx, netest)
+		if err != nil {
+			klog.Error(err, err.Error())
+			return ctrl.Result{}, err
+		}
+	}
+
+	if testItems[meta.Ping].Status < netestv1alpha1.Runing {
+		// test pod ping
+		for _, ip := range podIPs {
+			for _, targetIP := range podIPs {
+				if ip == targetIP {
+					continue
+				}
+
+				work := &meta.NetestWork{
+					Type:  meta.Ping,
+					Value: targetIP.String(),
+				}
+				w.Work(ip, work)
+			}
 		}
 	}
 

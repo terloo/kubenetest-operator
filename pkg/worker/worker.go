@@ -39,6 +39,7 @@ func (w *NetestWorker) Work(ip *netip.Addr, work *meta.NetestWork) {
 		notReadyInfra.Passed = false
 		notReadyInfra.PodName = work.Value
 		w.stats = append(w.stats, notReadyInfra)
+		return
 	}
 
 	workerChan, ok := w.workersChan[ip]
@@ -80,8 +81,13 @@ func (w *NetestWorker) loopWork(ip *netip.Addr, workerChan <-chan *meta.NetestWo
 				klog.Error(err)
 				continue
 			}
-			// TODO
-			klog.Info("infra result: ", infraResp)
+
+			infraStats := stats.NewInfraNetestStats(ip)
+			infraStats.Passed = infraResp.Bridgenf == "" && infraResp.Bridgenf6 == "" &&
+				infraResp.Ipv4Forward == "" && infraResp.Ipv6DefaultForwarding == ""
+
+			klog.Info("infra result: ", infraStats)
+			w.stats = append(w.stats, infraStats)
 		}
 
 	}

@@ -5,6 +5,7 @@ Copyright 2023.
 package v1alpha1
 
 import (
+	"github.com/terloo/kubenetest-operator/pkg/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -16,8 +17,6 @@ type NetestSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// network test phase
-	Phase string `json:"phase,omitempty"`
 }
 
 // NetestStatus defines the observed state of Netest
@@ -25,13 +24,20 @@ type NetestStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
-
-	AgentTestResult map[string]TestResult `json:"agentTestResult,omitempty"`
+	TestItems map[meta.NetestType]*NetestResult `json:"testItems,omitempty"`
 }
 
-type TestResult struct {
-	Ping bool `json:"ping,omitempty"`
+type NetestResultState int
+
+const (
+	Queue     NetestResultState = iota + 1
+	Runing    NetestResultState = iota + 1
+	Completed NetestResultState = iota + 1
+)
+
+type NetestResult struct {
+	Type   meta.NetestType   `json:"type,omitempty"`
+	Status NetestResultState `json:"status,omitempty"`
 }
 
 //+kubebuilder:object:root=true

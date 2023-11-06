@@ -8,7 +8,7 @@ const (
 )
 
 type NetestWork struct {
-	Type     NetestType
+	Type    NetestType
 	PodName string
-	Value    string
+	Value   string
 }
